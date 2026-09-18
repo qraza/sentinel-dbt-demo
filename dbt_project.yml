@@ -1,0 +1,30 @@
+name: 'sentinel_demo'
+version: '1.0.0'
+config-version: 2
+profile: 'sentinel_demo'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+  
+vars:
+  sentinel_sample_limit: 20
+  sentinel_use_stub: true          # flip to false when Cortex is available
+  sentinel_model: 'claude-sonnet-4-5'
+  sentinel_max_tokens: 4096
+
+models:
+  sentinel_demo:
+    +materialized: table
+    sentinel:
+      +materialized: view
+
+tests:
+  +store_failures: true
+  +store_failures_as: table
