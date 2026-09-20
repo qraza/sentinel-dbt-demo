@@ -1,5 +1,13 @@
 {{ config(materialized='view') }}
 
+{% set model_node = graph.nodes.values()
+     | selectattr('name', 'equalto', 'trip_speeds')
+     | first %}
+
+{% set test_node = graph.nodes.values()
+     | selectattr('name', 'equalto', 'assert_speed_is_plausible')
+     | first %}
+
 with failing as (
     select
         a.trip_id,
@@ -23,6 +31,8 @@ select
         'distance_miles', distance_miles::varchar,
         'duration_mins',  duration_mins::varchar,
         'avg_speed_mph',  avg_speed_mph::varchar
-    )))                                            as failing_rows
+    )))                                            as failing_rows,
+    $${{ model_node.raw_code }}$$                  as model_sql,
+    $${{ test_node.raw_code }}$$                   as test_sql
 from failing
 having count(*) > 0

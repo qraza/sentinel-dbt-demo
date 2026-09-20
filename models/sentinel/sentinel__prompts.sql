@@ -19,6 +19,8 @@ select
     || '\nTEST TYPE: '     || test_type
     || '\nGUARDED MODEL: ' || guarded_model
     || '\nFAILING ROWS: '  || failure_count::varchar
+    || '\n\nSQL OF THE TEST:\n' || test_sql
+    || '\n\nSQL OF THE GUARDED MODEL:\n' || model_sql
     || '\n\nSAMPLE OF FAILING ROWS (JSON):\n' || failing_rows
         as prompt_text
 from {{ ref('sentinel__failures') }}
