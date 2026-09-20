@@ -40,7 +40,67 @@ Deliberately trivial, so the interesting code is obviously the diagnosis pipelin
 - `models/trip_speeds.sql` — computes `avg_speed_mph` with a **planted bug**: `* 600` where it should be `* 60`, inflating every speed tenfold
 - `tests/assert_speed_is_plausible.sql` — asserts speed stays under 100 mph; four of six rows breach it
 
-### The prompt
+---
+
+## Sample output
+
+The prompt `sentinel__prompts` generates, for the planted bug:
+
+```
+You are diagnosing a failing dbt test. Ground every claim in the evidence below.
+
+RULES:
+1. Ground every statement in the evidence provided.
+2. If the evidence is insufficient, say so plainly and set confidence to "low".
+   Do not invent tables, columns or values.
+3. If the evidence supports more than one plausible explanation (the data may be
+   wrong, OR the test expectation may be stale), name the competing explanations
+   and set confidence to "low". Reserve "high" for when alternatives are ruled out.
+4. Respond as a JSON object with keys: root_cause, suggested_fix, confidence, evidence.
+
+TEST: assert_speed_is_plausible
+TEST TYPE: singular
+GUARDED MODEL: trip_speeds
+FAILING ROWS: 4
+
+SQL OF THE TEST:
+select *
+from {{ ref('trip_speeds') }}
+where avg_speed_mph > 100
+
+SQL OF THE GUARDED MODEL:
+select
+    trip_id,
+    distance_miles,
+    duration_mins,
+    round((distance_miles / duration_mins) * 600, 2) as avg_speed_mph
+from {{ ref('trips') }}
+
+SAMPLE OF FAILING ROWS (JSON):
+[{"avg_speed_mph":"106.62","distance_miles":"9.24","duration_mins":"52","trip_id":"1"},
+ {"avg_speed_mph":"124","distance_miles":"3.1","duration_mins":"15","trip_id":"2"},
+ {"avg_speed_mph":"192","distance_miles":"12.8","duration_mins":"40","trip_id":"3"},
+ {"avg_speed_mph":"220.33","distance_miles":"22.4","duration_mins":"61","trip_id":"5"}]
+```
+
+Since Cortex isn't callable on a trial account, this prompt was validated by sending it to Claude directly. The diagnosis returned:
+
+```json
+{
+  "root_cause": "The avg_speed_mph expression in trip_speeds uses a conversion factor of 600 where it should use 60. Converting miles per minute to miles per hour means multiplying by 60, so every computed speed is inflated exactly 10x. All four failing rows reproduce under the formula as written: 9.24/52*600 = 106.62, 3.1/15*600 = 124, 12.8/40*600 = 192, 22.4/61*600 = 220.33.",
+  "suggested_fix": "Change `* 600` to `* 60` in trip_speeds, rebuild, and re-run assert_speed_is_plausible. Leave the test threshold unchanged; loosening it would hide the bug.",
+  "confidence": "high",
+  "evidence": "Every failing row is off by the same 10x factor, which points to a constant in the formula rather than bad inputs — bad data would be unlikely to inflate all rows uniformly. The inputs themselves describe plausible trips. The alternative explanation, that the 100 mph threshold is stale, is ruled out because the corrected speeds are 10-23 mph."
+}
+```
+
+The diagnosis names the specific line and proves it arithmetically against the sampled rows, rather than observing that the numbers look wrong. That difference is what including the SQL in the prompt buys.
+
+> Note: the manual run returned `evidence` as an array rather than a string, which the declared schema says should be a string. Cortex's token-level schema enforcement would have prevented that — a small illustration of why enforced structured output beats parsing after the fact.
+
+---
+
+## The prompt
 
 The grounding rules are carried over from the Python version's system prompt, including the one its evaluation harness proved necessary:
 
@@ -72,7 +132,7 @@ Then:
 
 ```sql
 select run_started_at, test_name, failure_count, confidence, root_cause
-from SENTINEL_FUSION_DEMO.DBT_Q.sentinel_diagnoses
+from <database>.<schema>.sentinel_diagnoses
 order by run_started_at desc;
 ```
 
@@ -157,11 +217,12 @@ Evidence therefore comes from the **warehouse** (`store_failures`) and metadata 
 
 ## What's deliberately unfinished
 
-- **Cortex call untested** — trial account limitation; one-line change to enable
-- **No SQL in the prompt** — the model sees that output is wrong but not the calculation producing it, so suggested fixes are generic. Adding the guarded model's SQL from `graph.nodes` is the obvious next improvement
+- **Cortex call untested** — trial account limitation; one-line change to enable; the prompt itself was validated manually (see [Sample output](#sample-output))
 - **One hardcoded test** — generalising across all failing tests via `graph.nodes` iteration is the next structural step
 - **No new/recurring/regressed classification** — the history table supports it; the view isn't written
 - **No Core/Fusion CI matrix**
+
+---
 
 ## Relationship to dbt-sentinel
 
@@ -174,7 +235,7 @@ Not a replacement — a second distribution for a different constraint.
 | API key | Required | None |
 | Data leaves warehouse | Yes (capped row sample) | **No** |
 | Structured output | Parsed from text | Enforced at generation |
-| Evidence | Compiled SQL + sampled rows | Failing rows (+ `graph.nodes` metadata) |
+| Evidence | Compiled SQL + sampled rows | Test SQL + model SQL + failing rows |
 | Calibration testing | Eval harness, 6 fixtures × 3 runs | Inherits the prompt; harness not yet ported |
 | Deployable in dbt Cloud | ✗ (can't `pip install` into a job) | ✓ |
 
